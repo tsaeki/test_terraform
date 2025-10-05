@@ -220,6 +220,23 @@ resource "aws_api_gateway_integration" "test_get" {
 resource "aws_api_gateway_deployment" "test" {
   rest_api_id = aws_api_gateway_rest_api.test_api.id
   
+  triggers = {
+    redeployment = sha1(jsonencode([
+      aws_api_gateway_resource.error_01.id,
+      aws_api_gateway_resource.error_02.id,
+      aws_api_gateway_resource.error_03.id,
+      aws_api_gateway_resource.test.id,
+      aws_api_gateway_method.error_01_get.id,
+      aws_api_gateway_method.error_02_get.id,
+      aws_api_gateway_method.error_03_get.id,
+      aws_api_gateway_method.test_get.id,
+      aws_api_gateway_integration.error_01_get.id,
+      aws_api_gateway_integration.error_02_get.id,
+      aws_api_gateway_integration.error_03_get.id,
+      aws_api_gateway_integration.test_get.id,
+    ]))
+  }
+  
   depends_on = [
     aws_api_gateway_integration.error_01_get,
     aws_api_gateway_integration.error_02_get,
