@@ -4,6 +4,61 @@ resource "aws_api_gateway_rest_api" "test_api" {
   description = "Test API Gateway for Error Endpoints"
 }
 
+resource "aws_cloudwatch_log_group" "api_gateway_access_logs" {
+  name              = "/aws/apigateway/${aws_api_gateway_rest_api.test_api.name}"
+  retention_in_days = var.log_retention_in_days
+
+  tags = local.common_tags
+}
+
+resource "aws_iam_role" "api_gateway_cloudwatch" {
+  name = "${local.name_prefix}-api-gateway-cloudwatch-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "apigateway.amazonaws.com"
+        }
+      }
+    ]
+  })
+
+  tags = local.common_tags
+}
+
+resource "aws_iam_role_policy" "api_gateway_cloudwatch" {
+  name = "${local.name_prefix}-api-gateway-cloudwatch-policy"
+  role = aws_iam_role.api_gateway_cloudwatch.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:DescribeLogGroups",
+          "logs:DescribeLogStreams",
+          "logs:PutLogEvents",
+          "logs:GetLogEvents",
+          "logs:FilterLogEvents"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+# API Gateway Account Settings
+resource "aws_api_gateway_account" "main" {
+  cloudwatch_role_arn = aws_iam_role.api_gateway_cloudwatch.arn
+}
+
 # /error_01 endpoint
 resource "aws_api_gateway_resource" "error_01" {
   rest_api_id = aws_api_gateway_rest_api.test_api.id
@@ -162,6 +217,38 @@ resource "aws_api_gateway_stage" "test" {
   deployment_id = aws_api_gateway_deployment.test.id
   rest_api_id   = aws_api_gateway_rest_api.test_api.id
   stage_name    = "test"
+
+  access_log_settings {
+    destination_arn = aws_cloudwatch_log_group.api_gateway_access_logs.arn
+    format = jsonencode({
+      requestId      = "$context.requestId"
+      ip             = "$context.identity.sourceIp"
+      caller         = "$context.identity.caller"
+      user           = "$context.identity.user"
+      requestTime    = "$context.requestTime"
+      httpMethod     = "$context.httpMethod"
+      resourcePath   = "$context.resourcePath"
+      status         = "$context.status"
+      protocol       = "$context.protocol"
+      responseLength = "$context.responseLength"
+    })
+  }
+
+  depends_on = [aws_api_gateway_account.main]
+}
+
+resource "aws_api_gateway_method_settings" "all" {
+  rest_api_id = aws_api_gateway_rest_api.test_api.id
+  stage_name  = aws_api_gateway_stage.test.stage_name
+  method_path = "*/*"
+
+  settings {
+    metrics_enabled    = false
+    logging_level      = "INFO"
+    data_trace_enabled = false
+  }
+
+  depends_on = [aws_api_gateway_account.main]
 }
 
 # Outputs
