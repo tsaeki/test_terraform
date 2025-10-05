@@ -243,9 +243,9 @@ resource "aws_api_gateway_method_settings" "all" {
   method_path = "*/*"
 
   settings {
-    metrics_enabled    = true
+    metrics_enabled    = false
     logging_level      = "INFO"
-    data_trace_enabled = true
+    data_trace_enabled = false
   }
 
   depends_on = [aws_api_gateway_account.main]
