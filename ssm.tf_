@@ -1,0 +1,21 @@
+resource "aws_ssm_parameter" "api_key" {
+  name        = "/prod/api/key"
+  description = "Production API key"
+  type        = "String"
+  value       = "dummy-api-key-value"
+
+  tags = {
+    Environment = "production"
+  }
+}
+
+resource "aws_ssm_parameter" "test" {
+  name        = "test"
+  description = "test"
+  type        = "String"
+  value       = "dummy-test-value"
+
+  tags = {
+    Environment = "production"
+  }
+}

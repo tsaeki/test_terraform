@@ -1,0 +1,32 @@
+data "aws_caller_identity" "current" {}
+
+module "ecr" {
+  source = "terraform-aws-modules/ecr/aws"
+  version = "2.3.1"
+
+  repository_name = local.ecr_repository_name
+  repository_image_tag_mutability = "MUTABLE"
+
+  repository_read_write_access_arns = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:user/tsaeki"]
+  repository_lifecycle_policy = jsonencode({
+    rules = [
+      {
+        rulePriority = 1,
+        description  = "Keep last 3 images",
+        selection = {
+          tagStatus   = "any",
+          countType   = "imageCountMoreThan",
+          countNumber = 3
+        },
+        action = {
+          type = "expire"
+        }
+      }
+    ]
+  })
+
+  tags = {
+    Terraform   = "true"
+    Environment = "dev"
+  }
+}

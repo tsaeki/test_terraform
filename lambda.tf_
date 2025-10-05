@@ -1,0 +1,40 @@
+# data "aws_ecr_repository" "lambda" {
+#   name = local.ecr_repository_name
+# }
+
+module "lambda_function" {
+  source = "terraform-aws-modules/lambda/aws"
+  version = "7.20.1"
+
+  function_name = local.function_name
+  description   = "Lambda function from Docker image"
+
+  create_package = false
+  # image_uri     = "${data.aws_ecr_repository.lambda.repository_url}:${local.image_tag}"
+  image_uri     = "${module.ecr.repository_url}:${local.image_tag}"
+  package_type  = "Image"
+
+  timeout = 30
+  memory_size = 128
+
+  environment_variables = {
+    LOG_LEVEL = "INFO"
+  }
+
+  attach_policy_statements = true
+  policy_statements = {
+    cloudwatch_logs = {
+      effect = "Allow"
+      actions = [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ]
+      resources = ["arn:aws:logs:*:*:*"]
+    }
+  }
+
+  vpc_subnet_ids         = module.vpc.public_subnets
+  vpc_security_group_ids = [module.vpc.default_security_group_id]
+  attach_network_policy = true
+}
