@@ -51,47 +51,6 @@ resource "aws_ecs_task_definition" "java_app" {
       }
     },
     {
-      name      = "jmx-exporter"
-      image     = "bitnami/jmx-exporter:latest"
-      essential = false
-
-      portMappings = [
-        {
-          containerPort = 5556
-          hostPort      = 5556
-          protocol      = "tcp"
-        }
-      ]
-
-      environment = [
-        {
-          name  = "SERVICE_PORT"
-          value = "5556"
-        }
-      ]
-
-      command = [
-        "5556",
-        "/opt/bitnami/jmx-exporter/example_configs/httpserver_sample_config.yml"
-      ]
-
-      logConfiguration = {
-        logDriver = "awslogs"
-        options = {
-          "awslogs-group"         = aws_cloudwatch_log_group.ecs_java_sidecar.name
-          "awslogs-region"        = var.aws_region
-          "awslogs-stream-prefix" = "jmx-exporter"
-        }
-      }
-
-      dependsOn = [
-        {
-          containerName = "java-app"
-          condition     = "START"
-        }
-      ]
-    },
-    {
       name      = "cloudwatch-agent"
       image     = "amazon/cloudwatch-agent:latest"
       essential = false
@@ -99,11 +58,7 @@ resource "aws_ecs_task_definition" "java_app" {
       environment = [
         {
           name  = "CW_CONFIG_CONTENT"
-          value = "{\"metrics\":{\"namespace\":\"JavaApp/JMX\",\"metrics_collected\":{\"prometheus\":{\"prometheus_config_path\":\"env:PROMETHEUS_CONFIG_CONTENT\",\"emf_processor\":{\"metric_declaration\":[{\"source_labels\":[\"job\"],\"label_matcher\":\"^jmx.*\",\"dimensions\":[[\"InstanceId\",\"job\"]],\"metric_selectors\":[\"^jvm_.*\",\"^java_.*\",\"^process_.*\"]}]}}}}}"
-        },
-        {
-          name  = "PROMETHEUS_CONFIG_CONTENT"
-          value = "global:\\n  scrape_interval: 1m\\nscrape_configs:\\n  - job_name: jmx\\n    static_configs:\\n      - targets:\\n          - localhost:5556"
+          value = "{\"metrics\":{\"namespace\":\"JavaApp/JMX\",\"metrics_collected\":{\"jmx\":{\"service_address\":\"service:jmx:rmi:///jndi/rmi://localhost:9010/jmxrmi\",\"measurement\":[{\"name\":\"java.lang:type=Memory\",\"metric_name_prefix\":\"jvm_memory_\"},{\"name\":\"java.lang:type=GarbageCollector,name=*\",\"metric_name_prefix\":\"jvm_gc_\"},{\"name\":\"java.lang:type=Threading\",\"metric_name_prefix\":\"jvm_threading_\"},{\"name\":\"java.lang:type=ClassLoading\",\"metric_name_prefix\":\"jvm_classloading_\"}],\"metrics_collection_interval\":60}}}}"
         }
       ]
 
@@ -118,7 +73,7 @@ resource "aws_ecs_task_definition" "java_app" {
 
       dependsOn = [
         {
-          containerName = "jmx-exporter"
+          containerName = "java-app"
           condition     = "START"
         }
       ]
@@ -147,18 +102,10 @@ resource "aws_ecs_service" "java_app" {
     container_port   = 8080
   }
 
-  load_balancer {
-    target_group_arn = aws_lb_target_group.jmx_metrics.arn
-    container_name   = "jmx-exporter"
-    container_port   = 5556
-  }
-
   depends_on = [
     aws_lb_listener.java_app,
-    aws_lb_listener.jmx_metrics,
     aws_iam_role_policy_attachment.ecs_execution_role,
     aws_cloudwatch_log_group.ecs_java,
-    aws_cloudwatch_log_group.ecs_java_sidecar,
     aws_cloudwatch_log_group.ecs_cloudwatch_agent
   ]
 
@@ -167,13 +114,6 @@ resource "aws_ecs_service" "java_app" {
 
 resource "aws_cloudwatch_log_group" "ecs_java" {
   name              = "/ecs/${local.name_prefix}-java"
-  retention_in_days = var.log_retention_in_days
-
-  tags = local.common_tags
-}
-
-resource "aws_cloudwatch_log_group" "ecs_java_sidecar" {
-  name              = "/ecs/${local.name_prefix}-jmx-exporter"
   retention_in_days = var.log_retention_in_days
 
   tags = local.common_tags
@@ -188,20 +128,13 @@ resource "aws_cloudwatch_log_group" "ecs_cloudwatch_agent" {
 
 resource "aws_security_group" "ecs_java_tasks" {
   name        = "${local.name_prefix}-ecs-java-tasks"
-  description = "Allow inbound access from the ALB to Java app and JMX exporter"
+  description = "Allow inbound access from the ALB to Java app"
   vpc_id      = module.vpc.vpc_id
 
   ingress {
     protocol        = "tcp"
     from_port       = 8080
     to_port         = 8080
-    security_groups = [aws_security_group.alb.id]
-  }
-
-  ingress {
-    protocol        = "tcp"
-    from_port       = 5556
-    to_port         = 5556
     security_groups = [aws_security_group.alb.id]
   }
 
@@ -239,28 +172,6 @@ resource "aws_lb_target_group" "java_app" {
   tags = local.common_tags
 }
 
-resource "aws_lb_target_group" "jmx_metrics" {
-  name        = "${local.name_prefix}-jmx-tg"
-  port        = 5556
-  protocol    = "HTTP"
-  vpc_id      = module.vpc.vpc_id
-  target_type = "ip"
-
-  health_check {
-    enabled             = true
-    healthy_threshold   = 2
-    interval            = 30
-    matcher             = "200,404"
-    path                = "/"
-    port                = "traffic-port"
-    protocol            = "HTTP"
-    timeout             = 5
-    unhealthy_threshold = 2
-  }
-
-  tags = local.common_tags
-}
-
 resource "aws_lb_listener" "java_app" {
   load_balancer_arn = aws_lb.main.arn
   port              = "8080"
@@ -269,17 +180,6 @@ resource "aws_lb_listener" "java_app" {
   default_action {
     type             = "forward"
     target_group_arn = aws_lb_target_group.java_app.arn
-  }
-}
-
-resource "aws_lb_listener" "jmx_metrics" {
-  load_balancer_arn = aws_lb.main.arn
-  port              = "9090"
-  protocol          = "HTTP"
-
-  default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.jmx_metrics.arn
   }
 }
 
