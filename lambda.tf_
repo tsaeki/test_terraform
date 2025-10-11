@@ -1,40 +1,66 @@
-# data "aws_ecr_repository" "lambda" {
-#   name = local.ecr_repository_name
-# }
+resource "aws_iam_role" "test_lambda_role" {
+  name = "${local.name_prefix}-test-lambda-role"
 
-module "lambda_function" {
-  source = "terraform-aws-modules/lambda/aws"
-  version = "7.20.1"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+      }
+    ]
+  })
 
-  function_name = local.function_name
-  description   = "Lambda function from Docker image"
+  tags = local.common_tags
+}
 
-  create_package = false
-  # image_uri     = "${data.aws_ecr_repository.lambda.repository_url}:${local.image_tag}"
-  image_uri     = "${module.ecr.repository_url}:${local.image_tag}"
-  package_type  = "Image"
+resource "aws_iam_role_policy" "test_lambda_logs" {
+  name = "${local.name_prefix}-test-lambda-logs-policy"
+  role = aws_iam_role.test_lambda_role.id
 
-  timeout = 30
-  memory_size = 128
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = "arn:aws:logs:*:*:*"
+      }
+    ]
+  })
+}
 
-  environment_variables = {
-    LOG_LEVEL = "INFO"
-  }
+resource "aws_lambda_function" "test_function" {
+  filename      = "${path.module}/src/lambda/test-handler.zip"
+  function_name = "${local.name_prefix}-test-function"
+  role          = aws_iam_role.test_lambda_role.arn
+  handler       = "test-handler.handler"
+  runtime       = "nodejs20.x"
+  timeout       = 30
+  memory_size   = 128
 
-  attach_policy_statements = true
-  policy_statements = {
-    cloudwatch_logs = {
-      effect = "Allow"
-      actions = [
-        "logs:CreateLogGroup",
-        "logs:CreateLogStream",
-        "logs:PutLogEvents"
-      ]
-      resources = ["arn:aws:logs:*:*:*"]
+  source_code_hash = filebase64sha256("${path.module}/src/lambda/test-handler.zip")
+
+  environment {
+    variables = {
+      LOG_LEVEL = "INFO"
     }
   }
 
-  vpc_subnet_ids         = module.vpc.public_subnets
-  vpc_security_group_ids = [module.vpc.default_security_group_id]
-  attach_network_policy = true
+  tags = local.common_tags
+}
+
+resource "aws_lambda_permission" "api_gateway_invoke" {
+  statement_id  = "AllowAPIGatewayInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.test_function.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_api_gateway_rest_api.test_api.execution_arn}/*/*"
 }
