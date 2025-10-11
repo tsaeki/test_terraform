@@ -10,7 +10,7 @@ resource "aws_ecs_task_definition" "java_app" {
   container_definitions = jsonencode([
     {
       name      = "java-app"
-      image     = "${module.ecr_java.repository_url}:latest"
+      image     = "${module.ecr_java.repository_url}:jmx-exporter"
       essential = true
 
       portMappings = [
@@ -20,8 +20,8 @@ resource "aws_ecs_task_definition" "java_app" {
           protocol      = "tcp"
         },
         {
-          containerPort = 9010
-          hostPort      = 9010
+          containerPort = 9404
+          hostPort      = 9404
           protocol      = "tcp"
         }
       ]
@@ -32,6 +32,11 @@ resource "aws_ecs_task_definition" "java_app" {
           value = "production"
         }
       ]
+
+      dockerLabels = {
+        ECS_PROMETHEUS_EXPORTER_PORT = "9404"
+        Java_EMF_Metrics            = "true"
+      }
 
       logConfiguration = {
         logDriver = "awslogs"
@@ -59,6 +64,10 @@ resource "aws_ecs_task_definition" "java_app" {
         {
           name      = "CW_CONFIG_CONTENT"
           valueFrom = aws_ssm_parameter.cloudwatch_agent_config.arn
+        },
+        {
+          name      = "PROMETHEUS_CONFIG_CONTENT"
+          valueFrom = aws_ssm_parameter.prometheus_config.arn
         }
       ]
 
@@ -108,7 +117,8 @@ resource "aws_ecs_service" "java_app" {
     aws_iam_role_policy.ecs_execution_ssm_policy,
     aws_cloudwatch_log_group.ecs_java,
     aws_cloudwatch_log_group.ecs_cloudwatch_agent,
-    aws_ssm_parameter.cloudwatch_agent_config
+    aws_ssm_parameter.cloudwatch_agent_config,
+    aws_ssm_parameter.prometheus_config
   ]
 
   tags = local.common_tags
@@ -186,46 +196,66 @@ resource "aws_lb_listener" "java_app" {
 }
 
 resource "aws_ssm_parameter" "cloudwatch_agent_config" {
-  name        = "/${local.enviroment}/cloudwatch-agent/jmx-config"
-  description = "CloudWatch Agent configuration for JMX metrics collection"
+  name        = "/${local.enviroment}/cloudwatch-agent/prometheus-config"
+  description = "CloudWatch Agent configuration for Prometheus metrics scraping"
   type        = "String"
   value = jsonencode({
-    metrics = {
-      namespace = "JavaApp/JMX"
+    logs = {
       metrics_collected = {
-        jmx = {
-          service_address             = "service:jmx:rmi:///jndi/rmi://localhost:9010/jmxrmi"
-          metrics_collection_interval = 60
-          measurement = [
-            {
-              name               = "java.lang:type=Memory"
-              attributes         = ["HeapMemoryUsage.used", "HeapMemoryUsage.max", "NonHeapMemoryUsage.used"]
-              metric_name_prefix = "jvm_memory_"
-            },
-            {
-              name               = "java.lang:type=GarbageCollector,name=G1 Young Generation"
-              attributes         = ["CollectionCount", "CollectionTime"]
-              metric_name_prefix = "jvm_gc_young_"
-            },
-            {
-              name               = "java.lang:type=GarbageCollector,name=G1 Old Generation"
-              attributes         = ["CollectionCount", "CollectionTime"]
-              metric_name_prefix = "jvm_gc_old_"
-            },
-            {
-              name               = "java.lang:type=Threading"
-              attributes         = ["ThreadCount", "DaemonThreadCount", "PeakThreadCount"]
-              metric_name_prefix = "jvm_threading_"
-            },
-            {
-              name               = "java.lang:type=ClassLoading"
-              attributes         = ["LoadedClassCount", "UnloadedClassCount"]
-              metric_name_prefix = "jvm_classloading_"
-            }
-          ]
+        prometheus = {
+          cluster_name = aws_ecs_cluster.main.name
+          log_group_name = "/aws/ecs/containerinsights/${aws_ecs_cluster.main.name}/prometheus"
+          prometheus_config_path = "env:PROMETHEUS_CONFIG_CONTENT"
+          emf_processor = {
+            metric_declaration = [
+              {
+                source_labels = ["job"]
+                label_matcher = "^java-jmx$"
+                dimensions = [
+                  ["ClusterName", "TaskDefinitionFamily"],
+                  ["ClusterName", "TaskDefinitionFamily", "gc"]
+                ]
+                metric_selectors = [
+                  "^jvm_memory_.*",
+                  "^jvm_threads_.*",
+                  "^jvm_gc_.*",
+                  "^jvm_classloading_.*",
+                  "^jvm_runtime_.*"
+                ]
+              }
+            ]
+          }
         }
       }
     }
+  })
+
+  tags = local.common_tags
+}
+
+resource "aws_ssm_parameter" "prometheus_config" {
+  name        = "/${local.enviroment}/prometheus/config"
+  description = "Prometheus scrape configuration for JMX metrics"
+  type        = "String"
+  value = yamlencode({
+    global = {
+      scrape_interval = "1m"
+      scrape_timeout  = "10s"
+    }
+    scrape_configs = [
+      {
+        job_name = "java-jmx"
+        static_configs = [
+          {
+            targets = ["localhost:9404"]
+            labels = {
+              ClusterName         = aws_ecs_cluster.main.name
+              TaskDefinitionFamily = "${local.name_prefix}-java-app"
+            }
+          }
+        ]
+      }
+    ]
   })
 
   tags = local.common_tags
@@ -244,7 +274,10 @@ resource "aws_iam_role_policy" "ecs_execution_ssm_policy" {
           "ssm:GetParameter",
           "ssm:GetParameters"
         ]
-        Resource = aws_ssm_parameter.cloudwatch_agent_config.arn
+        Resource = [
+          aws_ssm_parameter.cloudwatch_agent_config.arn,
+          aws_ssm_parameter.prometheus_config.arn
+        ]
       }
     ]
   })
@@ -263,11 +296,6 @@ resource "aws_iam_role_policy" "ecs_task_cloudwatch_metrics_policy" {
           "cloudwatch:PutMetricData"
         ]
         Resource = "*"
-        Condition = {
-          StringEquals = {
-            "cloudwatch:namespace" = "JavaApp/JMX"
-          }
-        }
       },
       {
         Effect = "Allow"
@@ -277,7 +305,10 @@ resource "aws_iam_role_policy" "ecs_task_cloudwatch_metrics_policy" {
           "logs:PutLogEvents",
           "logs:DescribeLogStreams"
         ]
-        Resource = "arn:aws:logs:${var.aws_region}:*:log-group:/ecs/${local.name_prefix}-*:*"
+        Resource = [
+          "arn:aws:logs:${var.aws_region}:*:log-group:/ecs/${local.name_prefix}-*:*",
+          "arn:aws:logs:${var.aws_region}:*:log-group:/aws/ecs/containerinsights/${aws_ecs_cluster.main.name}/*:*"
+        ]
       }
     ]
   })

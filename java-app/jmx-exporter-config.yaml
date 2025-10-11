@@ -1,0 +1,35 @@
+---
+# JMX Exporter configuration for Prometheus
+lowercaseOutputName: true
+lowercaseOutputLabelNames: true
+
+rules:
+  # JVM Memory metrics
+  - pattern: 'java.lang<type=Memory><HeapMemoryUsage>(\w+)'
+    name: jvm_memory_heap_$1
+    type: GAUGE
+  - pattern: 'java.lang<type=Memory><NonHeapMemoryUsage>(\w+)'
+    name: jvm_memory_nonheap_$1
+    type: GAUGE
+
+  # JVM Threading metrics
+  - pattern: 'java.lang<type=Threading><>(ThreadCount|DaemonThreadCount|PeakThreadCount|TotalStartedThreadCount)'
+    name: jvm_threads_$1
+    type: GAUGE
+
+  # JVM Garbage Collection metrics
+  - pattern: 'java.lang<type=GarbageCollector, name=(.+)><>(CollectionCount|CollectionTime)'
+    name: jvm_gc_$2
+    type: COUNTER
+    labels:
+      gc: "$1"
+
+  # JVM Class Loading metrics
+  - pattern: 'java.lang<type=ClassLoading><>(LoadedClassCount|UnloadedClassCount|TotalLoadedClassCount)'
+    name: jvm_classloading_$1
+    type: GAUGE
+
+  # JVM Runtime metrics
+  - pattern: 'java.lang<type=Runtime><>(Uptime|StartTime)'
+    name: jvm_runtime_$1
+    type: GAUGE
