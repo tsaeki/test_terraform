@@ -55,10 +55,10 @@ resource "aws_ecs_task_definition" "java_app" {
       image     = "amazon/cloudwatch-agent:latest"
       essential = false
 
-      environment = [
+      secrets = [
         {
-          name  = "CW_CONFIG_CONTENT"
-          value = "{\"metrics\":{\"namespace\":\"JavaApp/JMX\",\"metrics_collected\":{\"jmx\":{\"service_address\":\"service:jmx:rmi:///jndi/rmi://localhost:9010/jmxrmi\",\"measurement\":[{\"name\":\"java.lang:type=Memory\",\"metric_name_prefix\":\"jvm_memory_\"},{\"name\":\"java.lang:type=GarbageCollector,name=*\",\"metric_name_prefix\":\"jvm_gc_\"},{\"name\":\"java.lang:type=Threading\",\"metric_name_prefix\":\"jvm_threading_\"},{\"name\":\"java.lang:type=ClassLoading\",\"metric_name_prefix\":\"jvm_classloading_\"}],\"metrics_collection_interval\":60}}}}"
+          name      = "CW_CONFIG_CONTENT"
+          valueFrom = aws_ssm_parameter.cloudwatch_agent_config.arn
         }
       ]
 
@@ -105,8 +105,10 @@ resource "aws_ecs_service" "java_app" {
   depends_on = [
     aws_lb_listener.java_app,
     aws_iam_role_policy_attachment.ecs_execution_role,
+    aws_iam_role_policy.ecs_execution_ssm_policy,
     aws_cloudwatch_log_group.ecs_java,
-    aws_cloudwatch_log_group.ecs_cloudwatch_agent
+    aws_cloudwatch_log_group.ecs_cloudwatch_agent,
+    aws_ssm_parameter.cloudwatch_agent_config
   ]
 
   tags = local.common_tags
@@ -181,6 +183,62 @@ resource "aws_lb_listener" "java_app" {
     type             = "forward"
     target_group_arn = aws_lb_target_group.java_app.arn
   }
+}
+
+resource "aws_ssm_parameter" "cloudwatch_agent_config" {
+  name        = "/${local.enviroment}/cloudwatch-agent/jmx-config"
+  description = "CloudWatch Agent configuration for JMX metrics collection"
+  type        = "String"
+  value = jsonencode({
+    metrics = {
+      namespace = "JavaApp/JMX"
+      metrics_collected = {
+        jmx = {
+          service_address = "service:jmx:rmi:///jndi/rmi://localhost:9010/jmxrmi"
+          measurement = [
+            {
+              name                = "java.lang:type=Memory"
+              metric_name_prefix  = "jvm_memory_"
+            },
+            {
+              name                = "java.lang:type=GarbageCollector,name=*"
+              metric_name_prefix  = "jvm_gc_"
+            },
+            {
+              name                = "java.lang:type=Threading"
+              metric_name_prefix  = "jvm_threading_"
+            },
+            {
+              name                = "java.lang:type=ClassLoading"
+              metric_name_prefix  = "jvm_classloading_"
+            }
+          ]
+          metrics_collection_interval = 60
+        }
+      }
+    }
+  })
+
+  tags = local.common_tags
+}
+
+resource "aws_iam_role_policy" "ecs_execution_ssm_policy" {
+  name = "${local.name_prefix}-ecs-execution-ssm-policy"
+  role = aws_iam_role.ecs_execution_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "ssm:GetParameter",
+          "ssm:GetParameters"
+        ]
+        Resource = aws_ssm_parameter.cloudwatch_agent_config.arn
+      }
+    ]
+  })
 }
 
 resource "aws_iam_role_policy" "ecs_task_cloudwatch_metrics_policy" {
