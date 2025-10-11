@@ -6,6 +6,10 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 6.0"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.0"
+    }
   }
 
   backend "s3" {
@@ -16,4 +20,4 @@ terraform {
 }
 
 # Get current AWS account ID
-# data "aws_caller_identity" "current" {}
+data "aws_caller_identity" "current" {}
