@@ -22,3 +22,13 @@ output "jmx_metrics_endpoint" {
   description = "JMX metrics endpoint (ALB DNS:9090)"
   value       = "http://${aws_lb.main.dns_name}:9090/metrics"
 }
+
+output "cloudwatch_metrics_namespace" {
+  description = "CloudWatch Metrics namespace for JMX metrics"
+  value       = "JavaApp/JMX"
+}
+
+output "cloudwatch_agent_log_group" {
+  description = "CloudWatch log group for CloudWatch Agent sidecar"
+  value       = aws_cloudwatch_log_group.ecs_cloudwatch_agent.name
+}

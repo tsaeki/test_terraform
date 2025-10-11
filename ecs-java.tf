@@ -90,6 +90,38 @@ resource "aws_ecs_task_definition" "java_app" {
           condition     = "START"
         }
       ]
+    },
+    {
+      name      = "cloudwatch-agent"
+      image     = "amazon/cloudwatch-agent:latest"
+      essential = false
+
+      environment = [
+        {
+          name  = "CW_CONFIG_CONTENT"
+          value = "{\"metrics\":{\"namespace\":\"JavaApp/JMX\",\"metrics_collected\":{\"prometheus\":{\"prometheus_config_path\":\"env:PROMETHEUS_CONFIG_CONTENT\",\"emf_processor\":{\"metric_declaration\":[{\"source_labels\":[\"job\"],\"label_matcher\":\"^jmx.*\",\"dimensions\":[[\"InstanceId\",\"job\"]],\"metric_selectors\":[\"^jvm_.*\",\"^java_.*\",\"^process_.*\"]}]}}}}}"
+        },
+        {
+          name  = "PROMETHEUS_CONFIG_CONTENT"
+          value = "global:\\n  scrape_interval: 1m\\nscrape_configs:\\n  - job_name: jmx\\n    static_configs:\\n      - targets:\\n          - localhost:5556"
+        }
+      ]
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-group"         = aws_cloudwatch_log_group.ecs_cloudwatch_agent.name
+          "awslogs-region"        = var.aws_region
+          "awslogs-stream-prefix" = "cloudwatch-agent"
+        }
+      }
+
+      dependsOn = [
+        {
+          containerName = "jmx-exporter"
+          condition     = "START"
+        }
+      ]
     }
   ])
 
@@ -126,7 +158,8 @@ resource "aws_ecs_service" "java_app" {
     aws_lb_listener.jmx_metrics,
     aws_iam_role_policy_attachment.ecs_execution_role,
     aws_cloudwatch_log_group.ecs_java,
-    aws_cloudwatch_log_group.ecs_java_sidecar
+    aws_cloudwatch_log_group.ecs_java_sidecar,
+    aws_cloudwatch_log_group.ecs_cloudwatch_agent
   ]
 
   tags = local.common_tags
@@ -141,6 +174,13 @@ resource "aws_cloudwatch_log_group" "ecs_java" {
 
 resource "aws_cloudwatch_log_group" "ecs_java_sidecar" {
   name              = "/ecs/${local.name_prefix}-jmx-exporter"
+  retention_in_days = var.log_retention_in_days
+
+  tags = local.common_tags
+}
+
+resource "aws_cloudwatch_log_group" "ecs_cloudwatch_agent" {
+  name              = "/ecs/${local.name_prefix}-cloudwatch-agent"
   retention_in_days = var.log_retention_in_days
 
   tags = local.common_tags
@@ -241,4 +281,37 @@ resource "aws_lb_listener" "jmx_metrics" {
     type             = "forward"
     target_group_arn = aws_lb_target_group.jmx_metrics.arn
   }
+}
+
+resource "aws_iam_role_policy" "ecs_task_cloudwatch_metrics_policy" {
+  name = "${local.name_prefix}-ecs-task-cloudwatch-metrics-policy"
+  role = aws_iam_role.ecs_task_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "cloudwatch:PutMetricData"
+        ]
+        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "cloudwatch:namespace" = "JavaApp/JMX"
+          }
+        }
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents",
+          "logs:DescribeLogStreams"
+        ]
+        Resource = "arn:aws:logs:${var.aws_region}:*:log-group:/ecs/${local.name_prefix}-*:*"
+      }
+    ]
+  })
 }

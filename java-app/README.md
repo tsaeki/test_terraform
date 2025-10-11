@@ -15,8 +15,10 @@ ECS Task
 ├── Java Application Container
 │   ├── Port 8080: HTTP API
 │   └── Port 9010: JMX Remote Port
-└── JMX Exporter Sidecar Container
-    └── Port 5556: Prometheus Metrics Endpoint
+├── JMX Exporter Sidecar Container
+│   └── Port 5556: Prometheus Metrics Endpoint
+└── CloudWatch Agent Sidecar Container
+    └── Scrapes metrics from JMX Exporter and sends to CloudWatch Metrics
 ```
 
 ## エンドポイント
@@ -28,6 +30,10 @@ ECS Task
 
 ### JMX Exporter (Port 5556)
 - `GET /metrics` - Prometheus形式のJMXメトリクス
+
+### CloudWatch Metrics
+- **Namespace**: `JavaApp/JMX`
+- JVMメモリ、GC、スレッド、クラスローディングなどのメトリクスがCloudWatchに送信されます
 
 ## ローカルでのビルドとテスト
 
@@ -101,6 +107,33 @@ curl http://${ALB_DNS}:8080/health
 curl http://${ALB_DNS}:9090/metrics  # JMX Exporter metrics
 ```
 
+### 4. CloudWatch Metricsの確認
+AWS Management ConsoleまたはCLIでメトリクスを確認:
+
+```bash
+# メトリクス一覧を取得
+aws cloudwatch list-metrics \
+  --namespace JavaApp/JMX \
+  --region ap-northeast-1
+
+# 特定のメトリクスデータを取得（例：JVMヒープメモリ使用量）
+aws cloudwatch get-metric-statistics \
+  --namespace JavaApp/JMX \
+  --metric-name jvm_memory_bytes_used \
+  --dimensions Name=area,Value=heap \
+  --start-time $(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%S) \
+  --end-time $(date -u +%Y-%m-%dT%H:%M:%S) \
+  --period 300 \
+  --statistics Average \
+  --region ap-northeast-1
+```
+
+または、AWS Management Consoleで:
+1. CloudWatchコンソールを開く
+2. 「メトリクス」→「すべてのメトリクス」を選択
+3. カスタム名前空間「JavaApp/JMX」を選択
+4. 利用可能なメトリクスを確認・グラフ化
+
 ## JMX設定
 
 ### Java Application
@@ -119,6 +152,13 @@ curl http://${ALB_DNS}:9090/metrics  # JMX Exporter metrics
 - Port 5556でPrometheus形式のメトリクスを公開
 - Java Applicationコンテナの起動後に開始
 
+### CloudWatch Agent Sidecar
+- Amazon CloudWatch Agentイメージを使用
+- JMX ExporterからPrometheus形式のメトリクスをスクレイプ
+- CloudWatch Metricsに名前空間 `JavaApp/JMX` でメトリクスを送信
+- スクレイプ間隔: 1分
+- 収集メトリクス: JVM、Java、プロセス関連のすべてのメトリクス
+
 ## トラブルシューティング
 
 ### タスクが起動しない場合
@@ -130,6 +170,15 @@ curl http://${ALB_DNS}:9090/metrics  # JMX Exporter metrics
 1. JMX Exporterのログを確認
 2. Javaアプリケーションが正しくJMXを有効化しているか確認
 3. コンテナ間通信が正しく設定されているか確認
+
+### CloudWatch Metricsにメトリクスが表示されない場合
+1. CloudWatch Agentのログを確認:
+   ```bash
+   aws logs tail /ecs/tsaeki-dev-cloudwatch-agent --follow --region ap-northeast-1
+   ```
+2. IAMロールに `cloudwatch:PutMetricData` 権限があるか確認
+3. JMX Exporterが正しくメトリクスを公開しているか確認
+4. タスク定義でCloudWatch Agentの環境変数が正しく設定されているか確認
 
 ## 参考リンク
 
