@@ -194,26 +194,35 @@ resource "aws_ssm_parameter" "cloudwatch_agent_config" {
       namespace = "JavaApp/JMX"
       metrics_collected = {
         jmx = {
-          service_address = "service:jmx:rmi:///jndi/rmi://localhost:9010/jmxrmi"
+          service_address             = "service:jmx:rmi:///jndi/rmi://localhost:9010/jmxrmi"
+          metrics_collection_interval = 60
           measurement = [
             {
-              name                = "java.lang:type=Memory"
-              metric_name_prefix  = "jvm_memory_"
+              name               = "java.lang:type=Memory"
+              attributes         = ["HeapMemoryUsage.used", "HeapMemoryUsage.max", "NonHeapMemoryUsage.used"]
+              metric_name_prefix = "jvm_memory_"
             },
             {
-              name                = "java.lang:type=GarbageCollector,name=*"
-              metric_name_prefix  = "jvm_gc_"
+              name               = "java.lang:type=GarbageCollector,name=G1 Young Generation"
+              attributes         = ["CollectionCount", "CollectionTime"]
+              metric_name_prefix = "jvm_gc_young_"
             },
             {
-              name                = "java.lang:type=Threading"
-              metric_name_prefix  = "jvm_threading_"
+              name               = "java.lang:type=GarbageCollector,name=G1 Old Generation"
+              attributes         = ["CollectionCount", "CollectionTime"]
+              metric_name_prefix = "jvm_gc_old_"
             },
             {
-              name                = "java.lang:type=ClassLoading"
-              metric_name_prefix  = "jvm_classloading_"
+              name               = "java.lang:type=Threading"
+              attributes         = ["ThreadCount", "DaemonThreadCount", "PeakThreadCount"]
+              metric_name_prefix = "jvm_threading_"
+            },
+            {
+              name               = "java.lang:type=ClassLoading"
+              attributes         = ["LoadedClassCount", "UnloadedClassCount"]
+              metric_name_prefix = "jvm_classloading_"
             }
           ]
-          metrics_collection_interval = 60
         }
       }
     }
