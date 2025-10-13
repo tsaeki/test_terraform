@@ -2,6 +2,7 @@ module "ecr_java" {
   source = "terraform-aws-modules/ecr/aws"
 
   repository_name = "${local.project_name}-java-ecr"
+  image_tag_mutability = "MUTABLE"
 
   repository_lifecycle_policy = jsonencode({
     rules = [
