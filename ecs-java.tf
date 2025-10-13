@@ -56,6 +56,51 @@ resource "aws_ecs_task_definition" "java_app" {
       }
     },
     {
+      name      = "activemq"
+      image     = "${module.ecr_activemq.repository_url}:latest"
+      essential = false
+
+      portMappings = [
+        {
+          containerPort = 61616
+          hostPort      = 61616
+          protocol      = "tcp"
+        },
+        {
+          containerPort = 8161
+          hostPort      = 8161
+          protocol      = "tcp"
+        },
+        {
+          containerPort = 9405
+          hostPort      = 9405
+          protocol      = "tcp"
+        }
+      ]
+
+      dockerLabels = {
+        ECS_PROMETHEUS_EXPORTER_PORT = "9405"
+        ActiveMQ_EMF_Metrics         = "true"
+      }
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-group"         = aws_cloudwatch_log_group.ecs_activemq.name
+          "awslogs-region"        = var.aws_region
+          "awslogs-stream-prefix" = "activemq"
+        }
+      }
+
+      healthCheck = {
+        command     = ["CMD-SHELL", "curl -f http://localhost:8161 || exit 1"]
+        interval    = 30
+        timeout     = 5
+        retries     = 3
+        startPeriod = 90
+      }
+    },
+    {
       name      = "cloudwatch-agent"
       image     = "amazon/cloudwatch-agent:latest"
       essential = false
@@ -83,6 +128,10 @@ resource "aws_ecs_task_definition" "java_app" {
       dependsOn = [
         {
           containerName = "java-app"
+          condition     = "START"
+        },
+        {
+          containerName = "activemq"
           condition     = "START"
         }
       ]
@@ -116,6 +165,7 @@ resource "aws_ecs_service" "java_app" {
     aws_iam_role_policy_attachment.ecs_execution_role,
     aws_iam_role_policy.ecs_execution_ssm_policy,
     aws_cloudwatch_log_group.ecs_java,
+    aws_cloudwatch_log_group.ecs_activemq,
     aws_cloudwatch_log_group.ecs_cloudwatch_agent,
     aws_ssm_parameter.cloudwatch_agent_config,
     aws_ssm_parameter.prometheus_config
@@ -137,6 +187,14 @@ resource "aws_cloudwatch_log_group" "ecs_cloudwatch_agent" {
 
   tags = local.common_tags
 }
+resource "aws_cloudwatch_log_group" "ecs_activemq" {
+  name              = "/ecs/${local.name_prefix}-activemq"
+  retention_in_days = var.log_retention_in_days
+
+  tags = local.common_tags
+}
+
+
 
 resource "aws_security_group" "ecs_java_tasks" {
   name        = "${local.name_prefix}-ecs-java-tasks"
@@ -213,6 +271,7 @@ resource "aws_ssm_parameter" "cloudwatch_agent_config" {
                 label_matcher = "^java-jmx$"
                 dimensions = [
                   ["ClusterName", "TaskDefinitionFamily"],
+                  ["ClusterName", "TaskDefinitionFamily", "application"],
                   ["ClusterName", "TaskDefinitionFamily", "gc"]
                 ]
                 metric_selectors = [
@@ -221,6 +280,25 @@ resource "aws_ssm_parameter" "cloudwatch_agent_config" {
                   "^jvm_gc_.*",
                   "^jvm_classloading_.*",
                   "^jvm_runtime_.*"
+                ]
+              },
+              {
+                source_labels = ["job"]
+                label_matcher = "^activemq-jmx$"
+                dimensions = [
+                  ["ClusterName", "TaskDefinitionFamily"],
+                  ["ClusterName", "TaskDefinitionFamily", "application"],
+                  ["ClusterName", "TaskDefinitionFamily", "broker"],
+                  ["ClusterName", "TaskDefinitionFamily", "queue"],
+                  ["ClusterName", "TaskDefinitionFamily", "topic"]
+                ]
+                metric_selectors = [
+                  "^jvm_memory_.*",
+                  "^jvm_threads_.*",
+                  "^jvm_gc_.*",
+                  "^activemq_broker_.*",
+                  "^activemq_queue_.*",
+                  "^activemq_topic_.*"
                 ]
               }
             ]
@@ -251,6 +329,20 @@ resource "aws_ssm_parameter" "prometheus_config" {
             labels = {
               ClusterName         = aws_ecs_cluster.main.name
               TaskDefinitionFamily = "${local.name_prefix}-java-app"
+              application          = "java-app"
+            }
+          }
+        ]
+      },
+      {
+        job_name = "activemq-jmx"
+        static_configs = [
+          {
+            targets = ["localhost:9405"]
+            labels = {
+              ClusterName         = aws_ecs_cluster.main.name
+              TaskDefinitionFamily = "${local.name_prefix}-java-app"
+              application          = "activemq"
             }
           }
         ]
