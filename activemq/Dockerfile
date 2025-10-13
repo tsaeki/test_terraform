@@ -2,7 +2,7 @@ FROM apache/activemq-classic:latest
 
 USER root
 
-RUN apk add --no-cache curl
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 
 RUN curl -L https://repo1.maven.org/maven2/io/prometheus/jmx/jmx_prometheus_javaagent/0.20.0/jmx_prometheus_javaagent-0.20.0.jar \
     -o /opt/jmx_prometheus_javaagent.jar
